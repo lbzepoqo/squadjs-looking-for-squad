@@ -36,6 +36,7 @@ true
     "channelID": "1167860946396528671",
     "commands": ["!lfs", "!look", "!invite"],
     "rateLimit": 15,
-    "warnLockedOnly": false
+    "warnLockedOnly": false,
+    "logToDiscord": false
 }
 ```

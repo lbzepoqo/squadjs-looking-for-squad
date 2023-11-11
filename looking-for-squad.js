@@ -27,6 +27,11 @@ export default class LookingForSquad extends DiscordBasePlugin {
                 required: false,
                 description: "Whether to warn locked squads only or both locked and unlocked squads.",
                 default: true
+            },
+            logToDiscord: {
+                required: false,
+                description: "Whether to log the warnings to Discord.",
+                default: false
             }
         };
     }
@@ -86,6 +91,26 @@ export default class LookingForSquad extends DiscordBasePlugin {
                     });
 
                     this.warn(steamID, `Your request has been sent to the squad leaders of your team.`);
+
+                    if (this.options.logToDiscord) {
+                        await this.sendDiscordMessage({
+                            embed: {
+                                title: `Player ${player.name} is looking for a squad`,
+                                color: 16761867,
+                                fields: [
+                                    {
+                                        name: 'Team ID',
+                                        value: player.teamID
+                                    },
+                                    {
+                                        name: 'Squad Leaders',
+                                        value: squadLeaders.map(squadLeader => squadLeader.name).join('\n')
+                                    }
+                                ],
+                                timestamp: (new Date()).toISOString()
+                            }
+                        });
+                    }
                 } else {
                     const message = this.options.warnLockedOnly 
                         ? `There are no locked squad leaders in your team.` 
