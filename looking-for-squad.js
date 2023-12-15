@@ -58,8 +58,6 @@ export default class LookingForSquad extends DiscordBasePlugin {
     }
     
     async onChatMessage(event) {
-        this.verbose(1, `Chat message received from ${event.player?.name}: ${event.message}`);
-
         if (this.options.commands.includes(event.message.toLowerCase())) {
             const { steamID } = event;
             const players = await this.server.rcon.getListPlayers();
@@ -120,6 +118,7 @@ export default class LookingForSquad extends DiscordBasePlugin {
             } else {
                 this.warn(steamID, `You must not be in a squad to use this command.`);
             }
+            this.verbose(1, `Player used the command: ${event.player?.name}`);
         }
     }
 }
