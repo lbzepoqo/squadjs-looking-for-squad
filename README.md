@@ -1,9 +1,6 @@
 # SquadJS Looking For Squad Plugin
 This plugin can be used to warn squad leaders of the same team that a player is looking for a squad.
 
-## Dependency
-This plugin is dependent to the changes of [this](https://github.com/Team-Silver-Sphere/SquadJS/pull/313) pull request.
-
 ### Options
 #### commands
 ###### Description
@@ -32,11 +29,8 @@ true
 {
     "plugin": "LookingForSquad",
     "enabled": true,
-    "discordClient": "discord",
-    "channelID": "1167860946396528671",
     "commands": ["!lfs", "!look", "!invite"],
     "rateLimit": 15,
-    "warnLockedOnly": false,
-    "logToDiscord": false
+    "warnLockedOnly": false
 }
 ```
