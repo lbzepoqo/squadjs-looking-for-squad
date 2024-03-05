@@ -1,6 +1,6 @@
-import DiscordBasePlugin from './discord-base-plugin.js';
+import BasePlugin from './base-plugin.js';
 
-export default class LookingForSquad extends DiscordBasePlugin {
+export default class LookingForSquad extends BasePlugin {
     static get description() {
         return "The <code>LookingForSquad</code> plugin can be used to warn squad leaders of the same team that a player is looking for a squad.";
     }
@@ -9,10 +9,8 @@ export default class LookingForSquad extends DiscordBasePlugin {
         return false;
     }
 
-    // Define the options for the plugin
     static get optionsSpecification() {
         return {
-            ...DiscordBasePlugin.optionsSpecification,
             commands: {
                 required: false,
                 description: "Command to trigger the plugin.",
@@ -27,98 +25,148 @@ export default class LookingForSquad extends DiscordBasePlugin {
                 required: false,
                 description: "Whether to warn locked squads only or both locked and unlocked squads.",
                 default: true
-            },
-            logToDiscord: {
-                required: false,
-                description: "Whether to log the warnings to Discord.",
-                default: false
             }
         };
     }
-    
+
     constructor(server, options, connectors) {
         super(server, options, connectors);
 
         this.onChatMessage = this.onChatMessage.bind(this);
-
-        // Define a warn function
-        this.warn = (steamid, msg) => { this.server.rcon.warn(steamid, msg) };
-
-        // Create a map to store the last used time for each user
-        this.lastUsed = new Map();
+        this.warn = (steamid, msg) => this.server.rcon.warn(steamid, msg);
+        this.lastUsed = new Map(); // Store last used time for rate limiting
     }
-    
+
     async mount() {
         this.verbose(1, 'Mounted.');
         this.server.on("CHAT_MESSAGE", this.onChatMessage);
     }
-    
+
     async unmount() {
         this.server.removeEventListener("CHAT_MESSAGE", this.onChatMessage);
     }
-    
-    async onChatMessage(event) {
-        if (this.options.commands.includes(event.message.toLowerCase())) {
-            const { steamID } = event;
-            const players = await this.server.rcon.getListPlayers();
-            const player = players.find(p => p.steamID === steamID);
-            const now = Date.now();
-            const lastUsed = this.lastUsed.get(steamID) || 0;
 
-            // Check if the command was used by the same user within the rate limit
-            if (now - lastUsed < this.options.rateLimit * 1000) {
-                this.warn(steamID, `You must wait ${this.options.rateLimit} seconds before using the command again.`);
-                return;
+    async handleInvCommand(event, squadId) {
+        const { steamID } = event;
+
+        // Rate limit check
+        if (this.shouldRateLimit(steamID)) {
+            this.warn(steamID, `You must wait ${this.options.rateLimit} seconds before using the command again.`);
+            return;
+        }
+
+        try {
+            const player = await this.getPlayer(steamID);
+            if (!player || player.squadID !== null) {
+                this.warn(steamID, 'You must not be in a squad to use this command.');
+                return; 
             }
-            // Update the last used time for the user
-            this.lastUsed.set(steamID, now);
-    
-            if (player && player.squadID === null) {
-                const squads = await this.server.rcon.getSquads();
-                const relevantSquads = squads.filter(s => s.teamID === player.teamID && (!this.options.warnLockedOnly || s.locked === 'True'));
-                const squadLeaders = players.filter(p => p.isLeader && relevantSquads.some(s => s.creatorSteamID === p.steamID));
 
-                this.verbose(2, 'Squads', squads);
-                this.verbose(2, 'Relevant squads', relevantSquads);
-                this.verbose(2, 'Squad Leaders', squadLeaders);
+            const relevantSquad = await this.findRelevantSquad(player.teamID, squadId);
 
-                if (squadLeaders.length > 0) {
-                    const message = `${player.name} is looking for a squad. Please consider inviting the player.`;
-                    squadLeaders.forEach(squadLeader => {
-                        this.warn(squadLeader.steamID, message);
-                    });
-
-                    this.warn(steamID, `Your request has been sent to the squad leaders of your team.`);
-
-                    if (this.options.logToDiscord) {
-                        await this.sendDiscordMessage({
-                            embed: {
-                                title: `Player ${player.name} is looking for a squad`,
-                                color: 16761867,
-                                fields: [
-                                    {
-                                        name: 'Team ID',
-                                        value: player.teamID
-                                    },
-                                    {
-                                        name: 'Squad Leaders',
-                                        value: squadLeaders.map(squadLeader => squadLeader.name).join('\n')
-                                    }
-                                ],
-                                timestamp: (new Date()).toISOString()
-                            }
-                        });
-                    }
-                } else {
-                    const message = this.options.warnLockedOnly 
-                        ? `There are no locked squad leaders in your team.` 
-                        : `There are no squad leaders in your team.`;
-                    this.warn(steamID, message);
-                }
+            if (relevantSquad) {
+                await this.notifySquadLeader(relevantSquad, player);
+                this.warn(steamID, `Your request has been sent to the squad leader of squad ${squadId}.`);
             } else {
-                this.warn(steamID, `You must not be in a squad to use this command.`);
+                this.warn(steamID, `Squad ${squadId} could not be found or is not on your team.`);
             }
-            this.verbose(1, `Player used the command: ${event.player?.name}`);
+        } catch (error) {
+            console.error('Error handling invite command:', error);
+            this.warn(steamID, 'An error occurred. Please try again later.');
         }
     }
-}
+
+    async handleInvCommandWithoutSquadId(event) {
+        const { steamID } = event;
+
+        // Rate limit check
+        if (this.shouldRateLimit(steamID)) {
+            this.warn(steamID, `You must wait ${this.options.rateLimit} seconds before using the command again.`);
+            return;
+        }
+
+        try {
+            const player = await this.getPlayer(steamID);
+            if (!player || player.squadID !== null) {
+                this.warn(steamID, 'You must not be in a squad to use this command.');
+                return; 
+            }
+
+            const relevantSquads = await this.findRelevantSquads(player.teamID);
+
+            if (relevantSquads.length > 0) {
+                for (const squad of relevantSquads) {
+                    await this.notifySquadLeader(squad, player);
+                }
+
+                this.warn(steamID, `Your request has been sent to the squad leaders of your team.`);
+
+            } else {
+                const message = this.options.warnLockedOnly 
+                    ? 'There are no locked squad leaders in your team.'
+                    : 'There are no squad leaders in your team.';
+                this.warn(steamID, message); 
+            }
+        } catch (error) {
+            console.error('Error handling command without squad ID:', error);
+            this.warn(steamID, 'An error occurred. Please try again later.');
+        }
+    }
+
+    async onChatMessage(event) {
+        const messageParts = event.message.toLowerCase().split(' ');
+        const command = messageParts[0];
+        const squadIdString = messageParts[1]; 
+
+        if (this.options.commands.includes(command)) {
+            if (squadIdString) {
+                const squadId = parseInt(squadIdString, 10);
+                if (!isNaN(squadId)) {
+                    await this.handleInvCommand(event, squadId);
+                } else {
+                    this.warn(event.steamID, 'Invalid squad ID. Usage: !inv <squad number>');
+                }
+            } else {
+                await this.handleInvCommandWithoutSquadId(event);
+            }
+        } 
+    }
+
+    shouldRateLimit(steamID) {
+        const now = Date.now();
+        const lastUsed = this.lastUsed.get(steamID) || 0;
+        const timeSinceLastUsed = now - lastUsed; 
+        const shouldLimit = timeSinceLastUsed < this.options.rateLimit * 1000;
+
+        if (!shouldLimit) {
+            this.lastUsed.set(steamID, now); // Update last used time
+        }
+
+        return shouldLimit;
+    }
+
+    async getPlayer(steamID) {
+        const players = await this.server.rcon.getListPlayers();
+        return players.find(p => p.steamID === steamID);
+    }
+
+    async findRelevantSquad(teamId, squadId) {
+        const squads = await this.server.rcon.getSquads();
+        return squads.find(s => s.squadID === squadId && s.teamID === teamId && (!this.options.warnLockedOnly || s.locked === 'True'));
+    }
+
+    async findRelevantSquads(teamId) {
+        const squads = await this.server.rcon.getSquads();
+        return squads.filter(s => s.teamID === teamId && (!this.options.warnLockedOnly || s.locked === 'True'));
+    }
+
+    async notifySquadLeader(squad, player) {
+        const squadLeader = await this.getPlayer(squad.creatorSteamID);
+        if (squadLeader) {
+            const message = `${player.name} is looking for a squad. Please consider inviting the player.`;
+            this.warn(squadLeader.steamID, message);
+        } else {
+            this.warn(player.steamID, `Squad ${squad.id} has no leader.`)
+        }
+    }
+} 
